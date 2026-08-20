@@ -70,6 +70,7 @@ public final class ImpactorEconomyService implements EconomyService {
         this.manager = new AccountManager(this.storage);
         this.networking = new NetworkingFactory(BaseImpactorPlugin.instance(), this).create(this.manager);
 
+        net.impactdev.impactor.core.economy.currencylimit.CurrencyLimitConfig.load();
         try {
             this.storage.init();
         } catch (Exception e) {

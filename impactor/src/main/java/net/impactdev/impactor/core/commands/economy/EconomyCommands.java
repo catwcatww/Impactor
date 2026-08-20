@@ -42,7 +42,9 @@ import net.impactdev.impactor.core.economy.EconomyConfig;
 import net.impactdev.impactor.core.economy.ImpactorEconomyService;
 import net.impactdev.impactor.core.economy.context.TransactionContext;
 import net.impactdev.impactor.core.economy.context.TransferTransactionContext;
+import net.impactdev.impactor.core.economy.currencylimit.CurrencyLimitConfig;
 import net.impactdev.impactor.core.translations.internal.ImpactorTranslations;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.util.TriState;
 import org.incendo.cloud.annotations.Argument;
 import org.incendo.cloud.annotations.Command;
@@ -56,6 +58,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.math.BigDecimal;
 import java.util.Comparator;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @SuppressWarnings({"DuplicatedCode", "unused"})
@@ -273,10 +276,15 @@ public final class EconomyCommands {
         });
     }
 
-    @Command("economy|eco baltop")
+    @Command("economy|eco baltop [page]")
     @ProxiedBy("baltop")
     @Permission("impactor.commands.economy.baltop")
-    public void baltop(final CommandSource source, @Nullable @Flag("currency") Currency currency, @Flag("extended") boolean nonPlayers) {
+    public void baltop(
+            final CommandSource source,
+            @Nullable @Argument("page") Integer page,
+            @Nullable @Flag("currency") Currency currency,
+            @Flag("extended") boolean nonPlayers
+    ) {
         EconomyService service = EconomyService.instance();
         Currency target = currency != null ? currency : service.currencies().primary();
 
@@ -286,16 +294,21 @@ public final class EconomyCommands {
             max.set(config.get(EconomyConfig.MAX_BALTOP_ENTRIES));
         }
 
+        int targetPage = (page != null && page > 0) ? page : 1;
+        int pageSize = max.get();
+        long skip = (long) (targetPage - 1) * pageSize;
+
         ImpactorTranslations.ECONOMY_BALTOP_CALCULATING.send(source, Context.empty());
         service.accounts(target).thenAccept(accounts -> {
             Context context = Context.empty().append(Currency.class, target);
             ImpactorTranslations.ECONOMY_BALTOP_HEADER.send(source, context);
 
-            AtomicInteger ranking = new AtomicInteger(1);
+            AtomicInteger ranking = new AtomicInteger((int) skip + 1);
             accounts.stream()
                     .sorted(Comparator.<Account, BigDecimal>comparing(Account::balance).reversed())
                     .filter(account -> !account.virtual() || nonPlayers)
-                    .limit(max.get())
+                    .skip(skip)
+                    .limit(pageSize)
                     .forEach(account -> {
                         Context relative = Context.empty().with(context)
                                 .append(Account.class, account)
@@ -304,6 +317,87 @@ public final class EconomyCommands {
                     });
 
             ImpactorTranslations.ECONOMY_BALTOP_FOOTER.send(source, context);
+        });
+    }
+
+    @Command("capdeposit <player> add <currency> <amount>")
+    @Permission("impactor.commands.economy.capdeposit")
+    @CommandDescription("Deposits currency into a player's balance, capped at a configured limit; excess is discarded")
+    public void capDepositAdd(
+            final @NotNull CommandSource source,
+            @Argument("player") PlatformSource target,
+            @Argument("currency") Currency currency,
+            @Argument("amount") double amount
+    ) {
+        EconomyService service = EconomyService.instance();
+
+        service.account(currency, target.uuid()).thenAccept(account -> {
+            BigDecimal before = account.balance();
+            BigDecimal cap = CurrencyLimitConfig.getCap(currency.key().toString());
+            BigDecimal room = cap.subtract(before).max(BigDecimal.ZERO);
+            BigDecimal requested = BigDecimal.valueOf(amount);
+            BigDecimal applied = requested.min(room);
+            BigDecimal discarded = requested.subtract(applied);
+
+            Context context = Context.empty();
+            context.append(Currency.class, currency);
+
+            if (applied.signum() > 0) {
+                EconomyTransaction transaction = account.deposit(applied);
+                context.append(TransactionContext.class, new TransactionContext(EconomyTransactionType.DEPOSIT, before, account.balance(), transaction.result()));
+                context.append(Account.class, account);
+
+                if (!transaction.successful()) {
+                    ImpactorTranslations.ECONOMY_TRANSACTION_FAILED.send(source, context);
+                } else {
+                    ImpactorTranslations.ECONOMY_TRANSACTION.send(source, context);
+                }
+            }
+
+            if (discarded.signum() > 0) {
+                source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                        "Excess of " + discarded + " " + currency.key() + " was discarded (cap of " + cap + " reached)."
+                ).color(NamedTextColor.GRAY));
+            }
+        });
+    }
+
+    @Command("capdeposit <player> set <currency> <amount>")
+    @Permission("impactor.commands.economy.capdeposit")
+    @CommandDescription("Sets the deposit cap for a currency (applies to future capdeposit add calls)")
+    public void capDepositSet(
+            final @NotNull CommandSource source,
+            @Argument("player") PlatformSource target,
+            @Argument("currency") Currency currency,
+            @Argument("amount") double amount
+    ) {
+        BigDecimal newCap = BigDecimal.valueOf(amount);
+        CurrencyLimitConfig.setCap(currency.key().toString(), newCap);
+
+        source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                "Cap for " + currency.key() + " set to " + newCap + " (applies to future deposits)."
+        ).color(NamedTextColor.GRAY));
+    }
+
+    @Command("resetcapdeposit")
+    @Permission("impactor.commands.economy.resetcapdeposit")
+    @CommandDescription("Resets ALL players' balances to 0 for every currency that has a configured cap")
+    public void resetCapDeposit(final @NotNull CommandSource source) {
+        EconomyService service = EconomyService.instance();
+        Set<String> cappedCurrencyKeys = CurrencyLimitConfig.cappedCurrencyKeys();
+
+        service.accounts().thenAccept(accounts -> {
+            int[] count = {0};
+            accounts.forEach((currency, account) -> {
+                if (cappedCurrencyKeys.contains(currency.key().toString().toLowerCase())) {
+                    account.reset();
+                    count[0]++;
+                }
+            });
+
+            source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                    "Reset " + count[0] + " account(s) across all capped currencies."
+            ).color(NamedTextColor.GRAY));
         });
     }
 }

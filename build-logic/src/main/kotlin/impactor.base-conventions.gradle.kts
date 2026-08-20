@@ -8,6 +8,7 @@ plugins {
 }
 
 repositories {
+    mavenLocal()
     mavenCentral()
     maven("https://maven.impactdev.net/repository/development/")
     maven("https://hub.spigotmc.org/nexus/content/groups/public/")
