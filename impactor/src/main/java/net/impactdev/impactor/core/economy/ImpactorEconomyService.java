@@ -35,6 +35,7 @@ import net.impactdev.impactor.api.storage.StorageType;
 import net.impactdev.impactor.api.utility.ExceptionPrinter;
 import net.impactdev.impactor.core.economy.accounts.AccountManager;
 import net.impactdev.impactor.core.economy.currency.ImpactorCurrencyProvider;
+import net.impactdev.impactor.core.economy.currencylimit.PlayerCapTracker;
 import net.impactdev.impactor.core.economy.networking.EconomyNetworkingService;
 import net.impactdev.impactor.core.economy.networking.NetworkingFactory;
 import net.impactdev.impactor.core.economy.storage.EconomyStorage;
@@ -69,7 +70,7 @@ public final class ImpactorEconomyService implements EconomyService {
         this.storage = StorageFactory.instance(BaseImpactorPlugin.instance(), this.config, StorageType.JSON);
         this.manager = new AccountManager(this.storage);
         this.networking = new NetworkingFactory(BaseImpactorPlugin.instance(), this).create(this.manager);
-
+        PlayerCapTracker.init();
         net.impactdev.impactor.core.economy.currencylimit.CurrencyLimitConfig.load();
         try {
             this.storage.init();

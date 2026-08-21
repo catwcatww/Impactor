@@ -43,6 +43,7 @@ import net.impactdev.impactor.core.economy.ImpactorEconomyService;
 import net.impactdev.impactor.core.economy.context.TransactionContext;
 import net.impactdev.impactor.core.economy.context.TransferTransactionContext;
 import net.impactdev.impactor.core.economy.currencylimit.CurrencyLimitConfig;
+import net.impactdev.impactor.core.economy.currencylimit.PlayerCapTracker;
 import net.impactdev.impactor.core.translations.internal.ImpactorTranslations;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.util.TriState;
@@ -322,29 +323,32 @@ public final class EconomyCommands {
 
     @Command("capdeposit <player> add <currency> <amount>")
     @Permission("impactor.commands.economy.capdeposit")
-    @CommandDescription("Deposits currency into a player's balance, capped at a configured limit; excess is discarded")
+    @CommandDescription("Grants currency to a player, limited by how much they can still receive this period; excess is discarded")
     public void capDepositAdd(
             final @NotNull CommandSource source,
             @Argument("player") PlatformSource target,
             @Argument("currency") Currency currency,
             @Argument("amount") double amount
     ) {
+        String currencyKey = currency.key().toString();
+        BigDecimal periodCap = CurrencyLimitConfig.getCap(currencyKey);
+        BigDecimal alreadyGained = PlayerCapTracker.getGained(target.uuid(), currencyKey);
+        BigDecimal room = periodCap.subtract(alreadyGained).max(BigDecimal.ZERO);
+        BigDecimal requested = BigDecimal.valueOf(amount);
+        BigDecimal applied = requested.min(room);
+        BigDecimal discarded = requested.subtract(applied);
+
         EconomyService service = EconomyService.instance();
 
-        service.account(currency, target.uuid()).thenAccept(account -> {
-            BigDecimal before = account.balance();
-            BigDecimal cap = CurrencyLimitConfig.getCap(currency.key().toString());
-            BigDecimal room = cap.subtract(before).max(BigDecimal.ZERO);
-            BigDecimal requested = BigDecimal.valueOf(amount);
-            BigDecimal applied = requested.min(room);
-            BigDecimal discarded = requested.subtract(applied);
-
-            Context context = Context.empty();
-            context.append(Currency.class, currency);
-
-            if (applied.signum() > 0) {
+        if (applied.signum() > 0) {
+            service.account(currency, target.uuid()).thenAccept(account -> {
+                BigDecimal before = account.balance();
                 EconomyTransaction transaction = account.deposit(applied);
+                PlayerCapTracker.addGained(target.uuid(), currencyKey, applied);
+
+                Context context = Context.empty();
                 context.append(TransactionContext.class, new TransactionContext(EconomyTransactionType.DEPOSIT, before, account.balance(), transaction.result()));
+                context.append(Currency.class, currency);
                 context.append(Account.class, account);
 
                 if (!transaction.successful()) {
@@ -352,16 +356,23 @@ public final class EconomyCommands {
                 } else {
                     ImpactorTranslations.ECONOMY_TRANSACTION.send(source, context);
                 }
-            }
 
-            if (discarded.signum() > 0) {
-                source.source().sendMessage(net.kyori.adventure.text.Component.text(
-                        "Excess of " + discarded + " " + currency.key() + " was discarded (cap of " + cap + " reached)."
-                ).color(NamedTextColor.GRAY));
-            }
-        });
+                if (discarded.signum() > 0) {
+                    source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                            "Excess of " + formatAmount(discarded) + " " + currencyKey + " was discarded (period cap of " + formatAmount(periodCap) + " reached)."
+                    ).color(NamedTextColor.GRAY));
+                }
+            });
+        } else {
+            source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                    "Nothing granted — player has already received the full period cap of " + formatAmount(periodCap) + " " + currencyKey + "."
+            ).color(NamedTextColor.GRAY));
+        }
     }
 
+    private static String formatAmount(BigDecimal amount) {
+        return amount.stripTrailingZeros().toPlainString();
+    }
     @Command("capdeposit <player> set <currency> <amount>")
     @Permission("impactor.commands.economy.capdeposit")
     @CommandDescription("Sets the deposit cap for a currency (applies to future capdeposit add calls)")
@@ -375,29 +386,19 @@ public final class EconomyCommands {
         CurrencyLimitConfig.setCap(currency.key().toString(), newCap);
 
         source.source().sendMessage(net.kyori.adventure.text.Component.text(
-                "Cap for " + currency.key() + " set to " + newCap + " (applies to future deposits)."
+                "Cap for " + currency.key() + " set to " + formatAmount(newCap) + " (applies to future deposits)."
         ).color(NamedTextColor.GRAY));
     }
 
     @Command("resetcapdeposit")
     @Permission("impactor.commands.economy.resetcapdeposit")
-    @CommandDescription("Resets ALL players' balances to 0 for every currency that has a configured cap")
+    @CommandDescription("Resets every player's period gain counter to 0 for all capped currencies (does NOT touch account balances)")
     public void resetCapDeposit(final @NotNull CommandSource source) {
-        EconomyService service = EconomyService.instance();
         Set<String> cappedCurrencyKeys = CurrencyLimitConfig.cappedCurrencyKeys();
+        int count = PlayerCapTracker.resetAllCurrencies(cappedCurrencyKeys);
 
-        service.accounts().thenAccept(accounts -> {
-            int[] count = {0};
-            accounts.forEach((currency, account) -> {
-                if (cappedCurrencyKeys.contains(currency.key().toString().toLowerCase())) {
-                    account.reset();
-                    count[0]++;
-                }
-            });
-
-            source.source().sendMessage(net.kyori.adventure.text.Component.text(
-                    "Reset " + count[0] + " account(s) across all capped currencies."
-            ).color(NamedTextColor.GRAY));
-        });
+        source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                "Reset period gain counters for " + count + " player(s) across all capped currencies."
+        ).color(NamedTextColor.GRAY));
     }
 }
