@@ -80,6 +80,11 @@ public class CurrencyLimitConfig {
         save();
     }
 
+    public static void unsetCap(String currencyKey) {
+        caps.remove(currencyKey.toLowerCase());
+        save();
+    }
+
 
     public static Set<String> cappedCurrencyKeys() {
         return caps.keySet();

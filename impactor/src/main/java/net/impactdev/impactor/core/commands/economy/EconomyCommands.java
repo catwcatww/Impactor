@@ -373,12 +373,11 @@ public final class EconomyCommands {
     private static String formatAmount(BigDecimal amount) {
         return amount.stripTrailingZeros().toPlainString();
     }
-    @Command("capdeposit <player> set <currency> <amount>")
+    @Command("capdeposit set <currency> <amount>")
     @Permission("impactor.commands.economy.capdeposit")
-    @CommandDescription("Sets the deposit cap for a currency (applies to future capdeposit add calls)")
+    @CommandDescription("Sets the global period cap for a currency (applies to future capdeposit add calls)")
     public void capDepositSet(
             final @NotNull CommandSource source,
-            @Argument("player") PlatformSource target,
             @Argument("currency") Currency currency,
             @Argument("amount") double amount
     ) {
@@ -392,13 +391,58 @@ public final class EconomyCommands {
 
     @Command("resetcapdeposit")
     @Permission("impactor.commands.economy.resetcapdeposit")
-    @CommandDescription("Resets every player's period gain counter to 0 for all capped currencies (does NOT touch account balances)")
-    public void resetCapDeposit(final @NotNull CommandSource source) {
+    @CommandDescription("Resets period gain counters for all capped currencies")
+    public void resetCapDepositAll(final @NotNull CommandSource source) {
+        resetAllCapped(source);
+    }
+
+    @Command("resetcapdeposit <currency>")
+    @Permission("impactor.commands.economy.resetcapdeposit")
+    @CommandDescription("Resets the period gain counter for a single currency")
+    public void resetCapDepositSingle(
+            final @NotNull CommandSource source,
+            @Argument("currency") Currency currency
+    ) {
+        String currencyKey = currency.key().toString();
+        int count = PlayerCapTracker.resetAll(currencyKey);
+
+        source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                "Reset period gain counters for " + count + " player(s) across " + currencyKey + "."
+        ).color(NamedTextColor.GRAY));
+    }
+
+    private void resetAllCapped(CommandSource source) {
         Set<String> cappedCurrencyKeys = CurrencyLimitConfig.cappedCurrencyKeys();
         int count = PlayerCapTracker.resetAllCurrencies(cappedCurrencyKeys);
 
         source.source().sendMessage(net.kyori.adventure.text.Component.text(
                 "Reset period gain counters for " + count + " player(s) across all capped currencies."
+        ).color(NamedTextColor.GRAY));
+    }
+
+    @Command("capdeposit unset <currency>")
+    @Permission("impactor.commands.economy.capdeposit")
+    @CommandDescription("Removes the period cap for a currency, making it uncapped again")
+    public void capDepositUnset(
+            final @NotNull CommandSource source,
+            @Argument("currency") Currency currency
+    ) {
+        String currencyKey = currency.key().toString();
+        CurrencyLimitConfig.unsetCap(currencyKey);
+
+        source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                "Cap removed for " + currencyKey + " — deposits are now unlimited via capdeposit."
+        ).color(NamedTextColor.GRAY));
+    }
+
+    @Command("capdeposit reload")
+    @Permission("impactor.commands.economy.capdeposit")
+    @CommandDescription("Reloads capdeposit configuration from disk")
+    public void capDepositReload(final @NotNull CommandSource source) {
+        CurrencyLimitConfig.load();
+
+        source.source().sendMessage(net.kyori.adventure.text.Component.text(
+                "Reloaded capdeposit configuration from disk."
         ).color(NamedTextColor.GRAY));
     }
 }
